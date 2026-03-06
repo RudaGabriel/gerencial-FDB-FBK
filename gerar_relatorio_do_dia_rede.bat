@@ -6,6 +6,7 @@ set "WEBROOT=%LOCALAPPDATA%\FDB_REL_WEB"
 set "HIST=%WEBROOT%\historico"
 set "ATUAL=%WEBROOT%\relatorio_atual.html"
 set "SERVER=%WEBROOT%\_server_fdb_rel.js"
+set "GENSCRIPTFILE=%WEBROOT%\_gen_script.txt"
 set "LOG=%WEBROOT%\server.log"
 set "BATLOG=%WEBROOT%\bat.log"
 set "KEYFILE=%WEBROOT%\_srv.key"
@@ -18,6 +19,7 @@ if /i "%~1"=="--remover" goto remover
 if not exist "%WEBROOT%" mkdir "%WEBROOT%" >nul 2>&1
 if not exist "%HIST%" mkdir "%HIST%" >nul 2>&1
 if not exist "%PROIB%" type nul > "%PROIB%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$max=1000KB;$min=(Get-Date).AddDays(-7);$f='%BATLOG%';if(Test-Path -LiteralPath $f){$raw=Get-Content -LiteralPath $f -Raw -ErrorAction SilentlyContinue;$parts=[regex]::Split([string]$raw,'(?m)(?=^INICIO )')|Where-Object{$_};$keep=New-Object System.Collections.Generic.List[string];foreach($c in $parts){if($c -match '(?m)^INICIO (\d{2})/(\d{2})/(\d{4})'){try{$dt=Get-Date -Day $matches[1] -Month $matches[2] -Year $matches[3];if($dt -ge $min){$keep.Add($c)}}catch{$keep.Add($c)}}else{$keep.Add($c)}};$txt=($keep -join '');while([Text.Encoding]::UTF8.GetByteCount($txt) -gt $max -and $keep.Count -gt 1){$keep.RemoveAt(0);$txt=($keep -join '')};Set-Content -LiteralPath $f -Value $txt -Encoding UTF8}" >nul 2>&1
 attrib +h "%WEBROOT%" >nul 2>&1
 set "NODE_EXE="
 for /f "delims=" %%N in ('where node 2^>nul') do if not defined NODE_EXE set "NODE_EXE=%%N"
@@ -27,9 +29,12 @@ if not defined NODE_EXE (
   exit /b 1
 )
 set "WEB_IP="
-for /f "delims=" %%I in ('powershell -NoProfile -Command "$c=Get-NetIPConfiguration ^| Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq ''Up'' -and $_.IPv4Address -and $_.InterfaceAlias -notmatch ''VMware|WARP|VirtualBox|Hyper-V|vEthernet'' } ^| Select-Object -First 1; if($c){ $c.IPv4Address.IPAddress }" 2^>nul') do if not defined WEB_IP set "WEB_IP=%%I"
+for /f "delims=" %%I in ('powershell -NoProfile -Command "$r=Get-NetRoute -AddressFamily IPv4 ^| Where-Object { $_.DestinationPrefix -eq ''0.0.0.0/0'' -and $_.NextHop -ne ''0.0.0.0'' } ^| Sort-Object RouteMetric,InterfaceMetric ^| Select-Object -First 1; if($r){ Get-NetIPAddress -InterfaceIndex $r.InterfaceIndex -AddressFamily IPv4 ^| Where-Object { $_.IPAddress -notlike ''169.254*'' -and $_.IPAddress -ne ''127.0.0.1'' } ^| Select-Object -First 1 -ExpandProperty IPAddress }" 2^>nul') do if not defined WEB_IP set "WEB_IP=%%I"
+if not defined WEB_IP for /f "delims=" %%I in ('powershell -NoProfile -Command "$c=Get-NetIPConfiguration ^| Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq ''Up'' -and $_.IPv4Address -and $_.InterfaceAlias -notmatch ''VMware|WARP|VirtualBox|Hyper-V|vEthernet'' } ^| Select-Object -First 1; if($c){ $c.IPv4Address.IPAddress }" 2^>nul') do if not defined WEB_IP set "WEB_IP=%%I"
 if not defined WEB_IP for /f "delims=" %%I in ('powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 ^| Where-Object { $_.IPAddress -notlike ''169.254*'' -and $_.IPAddress -ne ''127.0.0.1'' } ^| Select-Object -First 1 -ExpandProperty IPAddress)" 2^>nul') do if not defined WEB_IP set "WEB_IP=%%I"
 if not defined WEB_IP set "WEB_IP=127.0.0.1"
+set "REDE_HOST=%WEB_IP%"
+if /i "%REDE_HOST%"=="127.0.0.1" set "REDE_HOST=%COMPUTERNAME%"
 if not exist "%KEYFILE%" powershell -NoProfile -ExecutionPolicy Bypass -Command "[guid]::NewGuid().ToString('N')" > "%KEYFILE%"
 set "SRVKEY="
 for /f "usebackq delims=" %%K in ("%KEYFILE%") do if not defined SRVKEY set "SRVKEY=%%K"
@@ -70,9 +75,11 @@ attrib +h +s "%SERVER%" >nul 2>&1
 >>"%BATLOG%" echo WEBROOT=%WEBROOT%
 >>"%BATLOG%" echo PORTA=%PORTA%
 >>"%BATLOG%" echo IP=%WEB_IP%
+>>"%BATLOG%" echo HOST_REDE=%REDE_HOST%
 >>"%BATLOG%" echo NODE=%NODE_EXE%
 >>"%BATLOG%" echo FDB=%FDB%
 >>"%BATLOG%" echo SCRIPT=%SCRIPT%
+>>"%BATLOG%" echo GENSCRIPTFILE=%GENSCRIPTFILE%
 >>"%BATLOG%" echo SERVER=%SERVER%
 attrib +h +s "%BATLOG%" "%LOG%" >nul 2>&1
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set "DATA=%%i"
@@ -81,7 +88,7 @@ set "DATA_ARQ=%DD%-%MM%-%YYYY%"
 set "OUT=%ATUAL%"
 set "FDB_SRV_KEY=%SRVKEY%"
 set "FDB_SRV_BASE_LOCAL=http://127.0.0.1:%PORTA%"
-set "FDB_SRV_BASE_REDE=http://%WEB_IP%:%PORTA%"
+set "FDB_SRV_BASE_REDE=http://%REDE_HOST%:%PORTA%"
 copy /y "%PROIB%" "%PROIB_BAK%" >nul 2>&1
 cd /d "%~dp0"
 "%NODE_EXE%" "%SCRIPT%" --fdb "%FDB%" --data "%DATA%" --saida "%OUT%" --user SYSDBA --pass masterkey >> "%BATLOG%" 2>&1
@@ -105,13 +112,15 @@ set "SRVLOOP=%WEBROOT%\_srv_loop.cmd"
 >>"%SRVLOOP%" echo title FDB_REL_SRV
 >>"%SRVLOOP%" echo set "FDB_FILE=%FDB%"
 >>"%SRVLOOP%" echo set "GEN_SCRIPT=%SCRIPT%"
+>>"%SRVLOOP%" echo set "GEN_SCRIPT_FILE=%GENSCRIPTFILE%"
 >>"%SRVLOOP%" echo set "DBUSER=SYSDBA"
 >>"%SRVLOOP%" echo set "DBPASS=masterkey"
 >>"%SRVLOOP%" echo set "SRVKEY=%SRVKEY%"
->>"%SRVLOOP%" echo set "WEB_IP=%WEB_IP%"
+>>"%SRVLOOP%" echo set "WEB_IP=%REDE_HOST%"
 >>"%SRVLOOP%" echo set "PORTA=%PORTA%"
+>>"%SRVLOOP%" echo set "LOG_FILE=%LOG%"
 >>"%SRVLOOP%" echo :loop
->>"%SRVLOOP%" echo "%NODE_EXE%" "%SERVER%" "%WEBROOT%" %PORTA% ^>^> "%LOG%" 2^>^&1
+>>"%SRVLOOP%" echo "%NODE_EXE%" "%SERVER%" "%WEBROOT%" %PORTA%
 >>"%SRVLOOP%" echo timeout /t 2 /nobreak ^>nul
 >>"%SRVLOOP%" echo goto loop
 attrib +h +s "%SRVLOOP%" >nul 2>&1
@@ -135,7 +144,7 @@ if not defined OK (
 )
 :ok
 >>"%BATLOG%" echo SERVIDOR_OK
-if "%AUTO%"=="0" start "" "http://%WEB_IP%:%PORTA%/"
+if "%AUTO%"=="0" start "" "http://127.0.0.1:%PORTA%/"
 exit /b 0
 :criar_server
 set "B64=%WEBROOT%\_server_fdb_rel.b64"
