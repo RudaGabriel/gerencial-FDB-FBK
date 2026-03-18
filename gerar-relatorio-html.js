@@ -184,13 +184,14 @@ venda as (
 )
 select
   v.vendedor as VENDEDOR,
+  n.modelo as MODELO,
   cast(n.${campoNumeroOut} as varchar(30)) as NUMERO,
   ${selCaixa} as CAIXA,
   n.total as TOTAL,
   v.pagamentos as PAGAMENTOS
 from venda v
-join nfce n on n.data=v.data and n.modelo=99 and trim(leading '0' from cast(n.${campoJoinPag} as varchar(30)))=trim(leading '0' from cast(v.pedido as varchar(30)))
-order by v.vendedor, n.${campoNumeroOut}
+join nfce n on n.data=v.data and n.modelo in (99,65) and trim(leading '0' from cast(n.${campoJoinPag} as varchar(30)))=trim(leading '0' from cast(v.pedido as varchar(30)))
+order by v.vendedor, n.modelo, n.${campoNumeroOut}
 `;
 			const r = await query(db, sql, [dataISO]);
 			if (r.e) {
@@ -205,8 +206,11 @@ order by v.vendedor, n.${campoNumeroOut}
 				if (/^\d+$/.test(numero) && numero.length < 6) numero = numero.padStart(6, "0");
 				let caixa = String(x.CAIXA ?? "").trim();
 				if (/^\d+$/.test(caixa) && caixa.length < 3) caixa = caixa.padStart(3, "0");
+				const modelo = Number(x.MODELO || 99);
 				return {
 					vendedor: String(x.VENDEDOR ?? "").trim() || "(sem vendedor)",
+					modelo,
+					tipo: modelo === 65 ? "nfc-e" : "gerencial",
 					numero,
 					caixa,
 					total: Number(x.TOTAL || 0),
@@ -358,7 +362,7 @@ const dados = {
 				totaisDia
 			};
 			const dadosJSON = JSON.stringify(dados).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
-			const html = String.raw`<!doctype html><html lang="pt-br"><head><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="icon" href="/favicon.ico"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relatório ${escHtml(dataBR)}</title>
+			const html = String.raw`<!doctype html><html lang="pt-br"><head><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="icon" href="/favicon.ico"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relatório Pet World ${escHtml(dataBR)}</title>
 <style>
 :root {
   color-scheme: dark;
@@ -387,9 +391,9 @@ a {
 }
 .top {
   display: grid;
-  grid-template-columns: 0fr auto;
+  /* grid-template-columns: 0fr auto; */
   gap: 5px;
-  align-items: center;
+  justify-content: center;
   padding: 8px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0));
@@ -454,6 +458,31 @@ span#tQtd,span#tQtdGer,span#tQtdNfce {
   border-radius: 12px;
   outline: none;
   height: 40px;
+}
+.radioBusca {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.radioBusca label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.95;
+}
+.radioBusca input {
+  margin: 0;
+  accent-color: #78b4ff;
 }
 .input:focus {
   border-color: rgba(120, 180, 255, 0.55);
@@ -719,14 +748,18 @@ tbody td:nth-child(1) {
 }
 thead th:nth-child(2),
 tbody td:nth-child(2) {
-  width: 120px;
+  width: 95px;
 }
 thead th:nth-child(3),
 tbody td:nth-child(3) {
-  width: 110px;
+  width: 120px;
 }
 thead th:nth-child(4),
 tbody td:nth-child(4) {
+  width: 110px;
+}
+thead th:nth-child(5),
+tbody td:nth-child(5) {
   width: 220px;
 }
 tbody td {
@@ -735,16 +768,18 @@ tbody td {
   text-align: center;
 }
 tbody td:nth-child(2),
-tbody td:nth-child(3) {
+tbody td:nth-child(3),
+tbody td:nth-child(4) {
   white-space: nowrap;
 }
 tbody td:nth-child(1),
-tbody td:nth-child(4) {
+tbody td:nth-child(2),
+tbody td:nth-child(5) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-tbody td:nth-child(5) {
+tbody td:nth-child(6) {
   overflow: hidden;
 }
 tbody tr {
@@ -1056,6 +1091,10 @@ tbody tr:hover {
     max-width: none;
     width: 100%;
   }
+  .radioBusca {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 680px) {
@@ -1099,6 +1138,12 @@ tbody tr:hover {
   .input {
     min-width: 0;
     flex: 1 1 auto;
+  }
+  .radioBusca {
+    width: 100%;
+    justify-content: space-between;
+    gap: 10px;
+    overflow-x: auto;
   }
   .tableTop {
     padding: 10px;
@@ -1221,6 +1266,7 @@ span#tDiaSel,span#tDiaGer,span#tDiaNfce {
 </div>
 <div class="right">
 <input id="q" class="input" title="Buscar... Excluir: -termo (1) ou [termo,~contém,=igual,proibidos,-proibidos] (múltiplos)  |  Valor: >100, 10-20, 12*3, 12/3, 12?  |  Múltiplos: +  |  Soma: =151 ou =151*2" placeholder="Buscar... Excluir: -termo (1) ou [termo,~contém,=igual,proibidos,-proibidos] (múltiplos)  |  Valor: >100, 10-20, 12*3, 12/3, 12?  |  Múltiplos: +  |  Soma: =151 ou =151*2" autocomplete="off">
+<div class="radioBusca" id="radioBusca" role="radiogroup" aria-label="Tipo da busca"><label><input type="radio" name="tipoBusca" value="todos" checked> Todos</label><label><input type="radio" name="tipoBusca" value="gerencial"> Gerencial</label><label><input type="radio" name="tipoBusca" value="nfce"> NFC-e</label></div>
 <button id="acoes" class="btn" type="button" title="Ações">Ações</button>
 <button id="ajuda" class="btn" type="button" title="Coringas disponíveis">?</button>
 <button id="proibidos" class="btn btnProibidos" type="button">[Proibidos]</button>
@@ -1256,7 +1302,8 @@ span#tDiaSel,span#tDiaGer,span#tDiaNfce {
 <table>
 <thead><tr>
 <th>vendedor</th>
-<th>numero do gerencial</th>
+<th>tipo</th>
+<th>número</th>
 <th>total</th>
 <th>forma de pagamento</th>
 <th>itens</th>
@@ -1340,6 +1387,9 @@ const fmt=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).fo
 const fmtCopia=v=>new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2,useGrouping:false}).format(Number(v||0));
 const esc=s=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 const LS_KEY="__cupons_proibidos__";
+const LS_KEY_PROIB_IGN="__cupons_proibidos_ignorados__";
+const LS_KEY_PROIB_IGN_DIA="__cupons_proibidos_ignorados_alerta_dia__";
+const LS_KEY_PROIB_ALERTA_DIA="__cupons_proibidos_alerta_dia__";
 const proibidosPadrao=["FARO","BIOFRESH","OPTIMUM","CIBAU","ATACAMA","GOLDEN","PIPICAT","SYNTEC",
 "MITZI","ND CAES","ND GATOS","GRANPLUS","PEDIGREE","WHISKAS","PREMIER","GUABI","NATURAL CAES",
 "NATURAL GATOS","PUTZ","GRANEL","ELANCO","VET LIFE","VETLIFE","KONIG","SAN REMO","SANREMO",
@@ -1364,7 +1414,51 @@ arr=raw.split(/\n|,/g);
 const limpo=uniq(arr.map(normP).filter(Boolean));
 return limpo.length?limpo:proibidosPadrao.slice();
 };
-const NL=String.fromCharCode(10),CR=String.fromCharCode(13);
+const NL=String.fromCharCode(10),CR=String.fromCharCode(13),RS=String.fromCharCode(30),US=String.fromCharCode(31);
+const hojeStr=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");};
+const ordenarLista=a=>uniq((a||[]).map(normP).filter(Boolean)).sort((a,b)=>a.localeCompare(b,"pt-BR"));
+const assLista=a=>ordenarLista(a).join(US);
+const fazerDiffProib=(local,srv)=>{
+const l=ordenarLista(local),s=ordenarLista(srv),setL=new Set(l),setS=new Set(s);
+const soLocal=l.filter(v=>!setS.has(v)),soSrv=s.filter(v=>!setL.has(v)),merged=ordenarLista([...l,...s]);
+return{local:l,srv:s,soLocal,soSrv,merged,ass:assLista(soLocal)+RS+assLista(soSrv)};
+};
+const lerProibIgn=()=>{
+const raw=String(localStorage.getItem(LS_KEY_PROIB_IGN)||"");
+if(!raw)return null;
+const p=raw.split(RS);
+return{ass:String(p[0]||""),soLocal:String(p[1]||"").split(US).map(normP).filter(Boolean),soSrv:String(p[2]||"").split(US).map(normP).filter(Boolean)};
+};
+const salvarProibIgn=diff=>localStorage.setItem(LS_KEY_PROIB_IGN,[String(diff&&diff.ass||""),assLista(diff&&diff.soLocal||[]),assLista(diff&&diff.soSrv||[])].join(RS));
+const limparProibIgn=()=>{localStorage.removeItem(LS_KEY_PROIB_IGN);localStorage.removeItem(LS_KEY_PROIB_IGN_DIA);};
+const jaAlertouProibHoje=()=>String(localStorage.getItem(LS_KEY_PROIB_ALERTA_DIA)||"")===hojeStr();
+const marcarAlertaProibHoje=()=>localStorage.setItem(LS_KEY_PROIB_ALERTA_DIA,hojeStr());
+const leuAlertaIgnHoje=ass=>String(localStorage.getItem(LS_KEY_PROIB_IGN_DIA)||"")===ass+RS+hojeStr();
+const marcarAlertaIgnHoje=ass=>localStorage.setItem(LS_KEY_PROIB_IGN_DIA,ass+RS+hojeStr());
+const abrirConflitoProibidos=(diff,onMerge,onKeep)=>{
+qs("#ovProibMerge")?.remove();
+const bloco=(titulo,arr)=>'<div style="border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px;background:rgba(255,255,255,.03)"><div style="font-weight:700;margin-bottom:6px">'+esc(titulo)+' ('+arr.length+')</div><div style="max-height:160px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,&quot;Liberation Mono&quot;,&quot;Courier New&quot;,monospace;font-size:12px">'+esc(arr.length?arr.join(NL):"-")+'</div></div>';
+const bg=document.createElement("div");
+bg.className="ov on";
+bg.id="ovProibMerge";
+bg.setAttribute("aria-hidden","false");
+bg.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="mhead"><div><div class="mtitle">Alterações nos proibidos</div><div class="msub">Foram encontradas diferenças entre esta máquina e o servidor. Você quer dar merge ou deixar como está?</div></div><div class="btn" id="pmFechar">Fechar</div></div><div class="mbody"><div style="display:grid;gap:10px">'+bloco("Só nesta máquina",diff.soLocal)+bloco("Só no servidor",diff.soSrv)+'</div><div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px"><div class="btn" id="pmManter">Deixar como está</div><div class="btn" id="pmMesclar">Dar merge</div></div></div></div>';
+document.body.appendChild(bg);
+const fechar=()=>bg.remove();
+const manter=()=>{fechar();onKeep&&onKeep();};
+const mesclar=()=>{fechar();onMerge&&onMerge();};
+qs("#pmFechar",bg).addEventListener("click",manter);
+qs("#pmManter",bg).addEventListener("click",manter);
+qs("#pmMesclar",bg).addEventListener("click",mesclar);
+bg.addEventListener("click",e=>{if(e.target===bg)manter();});
+document.addEventListener("keydown",function escKey(e){if(e.key==="Escape"){document.removeEventListener("keydown",escKey);manter();}});
+};
+const avisarProibIgnorado=diff=>{
+if(!diff||!diff.ass||jaAlertouProibHoje())return;
+marcarAlertaProibHoje();
+marcarAlertaIgnHoje(diff.ass);
+toast("Proibidos ignorados","Há alterações ignoradas entre esta máquina e o servidor. Abra Proibidos para revisar quando quiser.");
+};
 let valoresProibidos=lerProibidos();
 let reProibidos=new RegExp(valoresProibidos.map(escRe).join("|"),"i");
 const setProibidosUser=(lista,semSync)=>{
@@ -1381,6 +1475,13 @@ if(!s)return [];
 s=s.split(CR).join("").split(",").join(NL);
 return uniq(s.split(NL).map(normP).filter(Boolean));
 };
+const postarProibidos=lista=>{
+const h={"Content-Type":"text/plain; charset=utf-8"};
+const k=String(DADOS&&DADOS.srv_key||"").trim();
+if(k)h["x-key"]=k;
+const body=ordenarLista(lista).join(NL);
+return fetch("/__proibidos",{method:"POST",headers:h,body,cache:"no-store"}).then(r=>r&&r.ok?r.json():null,()=>null).then(j=>parseProib(j&&j.lista),()=>[]);
+};
 function syncProibidos(push){
 if(location.protocol!=="http:"&&location.protocol!=="https:")return;
 if(proibSyncPend)return;
@@ -1388,22 +1489,38 @@ proibSyncPend=1;
 const local=lerProibidos();
 fetch("/__proibidos",{cache:"no-store"}).then(r=>r&&r.ok?r.json():{ok:false,lista:[]},()=>({ok:false,lista:[]})).then(j=>{
 const srv=parseProib(j&&j.lista);
-const merged=uniq([...local,...srv].map(normP).filter(Boolean));
-const locStr=local.join(NL),srvStr=srv.join(NL),mStr=merged.join(NL);
-if(mStr!==locStr)setProibidosUser(merged,true);
-if(push||mStr!==srvStr){
-const h={"Content-Type":"text/plain; charset=utf-8"};
-const k=String(DADOS&&DADOS.srv_key||"").trim();
-if(k)h["x-key"]=k;
-fetch("/__proibidos",{method:"POST",headers:h,body:mStr,cache:"no-store"}).then(r=>r&&r.ok?r.json():null,()=>null).then(j2=>{
-const srv2=parseProib(j2&&j2.lista);
-const merged2=uniq([...merged,...srv2].map(normP).filter(Boolean));
-const m2=merged2.join(NL);
-if(m2&&m2!==mStr)setProibidosUser(merged2,true);
+const diff=fazerDiffProib(local,srv);
+if(!diff.soLocal.length&&!diff.soSrv.length){
+limparProibIgn();
 proibSyncPend=0;
-},()=>{proibSyncPend=0;});
-}else proibSyncPend=0;
+return;
+}
+const ign=lerProibIgn();
+if(ign&&ign.ass===diff.ass){
+avisarProibIgnorado(diff);
+proibSyncPend=0;
+return;
+}
+if(jaAlertouProibHoje()){
+proibSyncPend=0;
+return;
+}
+marcarAlertaProibHoje();
+abrirConflitoProibidos(diff,()=>{
+limparProibIgn();
+setProibidosUser(diff.merged,true);
+postarProibidos(diff.merged).then(srv2=>{
+const diff2=fazerDiffProib(diff.merged,srv2);
+if(diff2.soLocal.length||diff2.soSrv.length)setProibidosUser(diff2.merged,true);
+proibSyncPend=0;
 });
+},()=>{
+salvarProibIgn(diff);
+marcarAlertaIgnHoje(diff.ass);
+toast("Proibidos","Alterações ignoradas. Vou lembrar novamente amanhã.");
+proibSyncPend=0;
+});
+},()=>{proibSyncPend=0;});
 }
 syncProibidos(false);
 window.addEventListener("focus",()=>syncProibidos(false));
@@ -1558,7 +1675,8 @@ toast("Proibidos","Lista atualizada.");
 });
 bg.addEventListener("click",e=>{if(e.target===bg)fechar();});
 document.addEventListener("keydown",function escKey(e){if(e.key==="Escape"){document.removeEventListener("keydown",escKey);fechar();}});
-};let vendAtual="",vendFiltro="",qAtual="",qInc="",qIgn=[],qValor=false,linhaAtual=null,somaSel=null,somaKey="";
+};let vendAtual="",vendFiltro="",qAtual="",qInc="",qIgn=[],qValor=false,tipoBusca="todos",linhaAtual=null,somaSel=null,somaKey="";
+const tipoLinhaOk=x=>tipoBusca==="todos"||tipoBusca==="gerencial"&&Number(x&&x.modelo||0)===99||tipoBusca==="nfce"&&Number(x&&x.modelo||0)===65;
 const copiarTexto=txt=>{
 const fallback=()=>{
 const ta=document.createElement("textarea");
@@ -1844,6 +1962,7 @@ somaKey=key;
 const itens=[];
 for(let i=0;i<DADOS.vendas.length;i++){
 const x=DADOS.vendas[i];
+if(!tipoLinhaOk(x))continue;
 if(vendAtual&&x.vendedor!==vendAtual)continue;
 const v=Number(x.total||0);
 if(!Number.isFinite(v)||v<=0)continue;
@@ -1861,6 +1980,7 @@ for(const it of itens)if(soma+it.v<=lim){soma+=it.v;sel.add(it.i);}
 somaSel={alvo:p.alvo,tol:p.tol,soma,sel};
 };
 const passaFiltro=(x,i)=>{
+if(!tipoLinhaOk(x))return false;
 if(vendAtual&&x.vendedor!==vendAtual)return false;
 const raw=String(qAtual||"").trim();
 if(!raw)return true;
@@ -1870,7 +1990,7 @@ const pm=p.proibidosModo||0;if(pm===1&&vendaTemProibido(x))return false;if(pm===
 let hayN="",toks=null;
 const ign=p.ign||[];
 if(ign.length){
-hayN=normP((x.vendedor||"")+" "+(x.pagamentos||"")+" "+(x.itens||"")+" "+(x.caixa||"")+" "+(x.numero||"")+" "+String(x.total||""));
+hayN=normP((x.vendedor||"")+" "+(x.tipo||"")+" "+(x.pagamentos||"")+" "+(x.itens||"")+" "+(x.caixa||"")+" "+(x.numero||"")+" "+String(x.total||""));
 toks=hayN.split(" ").filter(Boolean);
 for(const o of ign){
 const term=normP(o?.t||"");
@@ -1898,10 +2018,10 @@ if(splitIdx>0){const base=part.slice(0,splitIdx).trim();const rest=part.slice(sp
 else incParts.push(part);
 }
 }
-const camposTxt=((x.vendedor||"")+" "+(x.pagamentos||"")+" "+(x.itens||"")+" "+(x.caixa||"")+" "+(x.numero||"")).toLowerCase();
+const camposTxt=((x.vendedor||"")+" "+(x.tipo||"")+" "+(x.pagamentos||"")+" "+(x.itens||"")+" "+(x.caixa||"")+" "+(x.numero||"")).toLowerCase();
 const totalNum=Number(x.total||0);
 if(excParts.length){
-if(!toks){hayN=normP((x.vendedor||"")+" "+(x.pagamentos||"")+" "+(x.itens||"")+" "+(x.caixa||"")+" "+(x.numero||"")+" "+String(x.total||""));toks=hayN.split(" ").filter(Boolean);}
+if(!toks){hayN=normP((x.vendedor||"")+" "+(x.tipo||"")+" "+(x.pagamentos||"")+" "+(x.itens||"")+" "+(x.caixa||"")+" "+(x.numero||"")+" "+String(x.total||""));toks=hayN.split(" ").filter(Boolean);}
 for(const ex of excParts){
 let et=String(ex||"").trim();
 if(!et)continue;
@@ -2024,6 +2144,19 @@ return out.trim();
 };
 
 const renderLista=()=>{
+const base=DADOS.vendas.filter(tipoLinhaOk);
+const porVend=new Map();
+let qtdBase=0,totalBase=0;
+for(const x of base){
+const nome=String(x&&x.vendedor||"").trim()||"(sem vendedor)";
+if(!porVend.has(nome))porVend.set(nome,{vendedor:nome,qtd:0,total:0});
+const it=porVend.get(nome);
+it.qtd++;
+it.total+=Number(x&&x.total||0);
+qtdBase++;
+totalBase+=Number(x&&x.total||0);
+}
+const vendedores=[...porVend.values()].sort((a,b)=>a.vendedor.localeCompare(b.vendedor,"pt-BR",{sensitivity:"base"}));
 const mk=(root,apos,filtro)=>{
 if(!root)return;
 root.innerHTML="";
@@ -2035,8 +2168,8 @@ div.addEventListener("click",()=>{click();if(apos)apos();});
 div.innerHTML='<div class="nome">'+esc(nome)+'</div><div class="meta"><div class="qtd">Vendas: '+qtd+'</div><div class="tot">'+esc(fmt(total))+'</div></div>';
 root.appendChild(div);
 };
-add("Todos",DADOS.totais.qtd,DADOS.totais.total,!vendAtual,()=>{vendAtual="";calcSomaSel();renderTudo();});
-for(const v of DADOS.vendedores){
+add("Todos",qtdBase,totalBase,!vendAtual,()=>{vendAtual="";calcSomaSel();renderTudo();});
+for(const v of vendedores){
 if(f&&String(v.vendedor||"").toLowerCase().indexOf(f)<0)continue;
 add(v.vendedor,v.qtd,v.total,vendAtual===v.vendedor,()=>{vendAtual=v.vendedor;calcSomaSel();renderTudo();});
 }
@@ -2091,7 +2224,8 @@ d.appendChild(kk);
 d.appendChild(vv);
 return d;
 };
-body.appendChild(mk("Gerencial",String(x.numero||"")));
+body.appendChild(mk("Tipo",String(x.tipo==="nfc-e"?"NFC-e":"Gerencial")));
+body.appendChild(mk("Número",String(x.numero||"")));
 body.appendChild(mk("Caixa",String(x.caixa||"")));
 body.appendChild(mk("Total",fmt(x.total||0)));
 body.appendChild(mk("Formas",String(x.pagamentos||"")));
@@ -2137,6 +2271,7 @@ add("/","1+ dígitos (somente antes da vírgula) — procura dentro da parte int
 add("?","exatamente 1 dígito (parte inteira) — procura dentro da parte inteira");
 add("=151 ou =151*num","combinação aproximada para somar até 151, combinação aproximada para somar até 151 ± adicional opcional");
 add("+","múltiplos filtros (ex: >50+CARTAO+-VENDEDOR) use sempre + para multiplas pesquisas");
+add("Rádio ao lado da busca","Escolha Todos, Gerencial ou NFC-e para aplicar a pesquisa somente no tipo selecionado");
 qs("#ov").classList.add("on");
 qs("#ov").setAttribute("aria-hidden","false");
 };
@@ -2178,7 +2313,7 @@ if(tb){
 const tr=document.createElement("tr");
 tr.addEventListener("click",()=>abrirModal(x));
 const itensInfo=itensTdHTML(x.itens);
-tr.innerHTML='<td>'+esc(x.vendedor||"")+'</td><td class="mono">'+esc(x.numero||"")+'</td><td class="mono">'+esc(fmt(x.total||0))+'</td><td class="mono">'+esc(x.pagamentos||"")+'</td><td>'+itensInfo.html+'</td>';
+tr.innerHTML='<td>'+esc(x.vendedor||"")+'</td><td>'+esc(x.tipo==="nfc-e"?"NFC-e":"Gerencial")+'</td><td class="mono">'+esc(x.numero||"")+'</td><td class="mono">'+esc(fmt(x.total||0))+'</td><td class="mono">'+esc(x.pagamentos||"")+'</td><td>'+itensInfo.html+'</td>';
 frag.appendChild(tr);
 }
 if(cards){
@@ -2188,6 +2323,7 @@ c.addEventListener("click",()=>abrirModal(x));
 const itensMini=itensMiniHTML(x.itens,false);
 let meta="";
 if(!vendAtual)meta=String(x.vendedor||"");
+meta+=(meta?" | ":"")+(x.tipo==="nfc-e"?"NFC-e":"Gerencial");
 if(x.caixa)meta+=(meta?" | ":"")+"Caixa: "+String(x.caixa||"");
 c.innerHTML='<div class="cardHead"><div class="cardNum mono">#'+esc(x.numero||"")+'</div><div class="cardTotal mono">'+esc(fmt(x.total||0))+'</div></div>'+(meta?('<div class="cardMeta mono">'+esc(meta)+'</div>'):"")+'<div class="cardPay mono">'+esc(x.pagamentos||"")+'</div>'+itensMini;
 fragC.appendChild(c);
@@ -2195,14 +2331,15 @@ fragC.appendChild(c);
 }
 if(tb)tb.appendChild(frag);
 if(cards)cards.appendChild(fragC);
-qs("#sub").textContent=vendAtual?("Vendedor: "+vendAtual):"Todos os vendedores";
+const tipoTxt=tipoBusca==="gerencial"?"Gerencial":tipoBusca==="nfce"?"NFC-e":"Todos";
+qs("#sub").textContent=(vendAtual?("Vendedor: "+vendAtual):"Todos os vendedores")+" • Tipo: "+tipoTxt;
 const vtxt=vendAtual||"Todos";
 qs("#vendSel").textContent=vtxt;
 const vt=qs("#vendTopTxt");if(vt)vt.textContent=vtxt;
 };
 const renderTudo=()=>{renderLista();renderResumoVend();renderTabela();};
-const qGer=Number(DADOS&&DADOS.totais?DADOS.totais.qtd:0)||0;
-const qNfce=Number(DADOS&&DADOS.totaisDia?DADOS.totaisDia.qtd_nfce:0)||0;
+const qGer=DADOS.vendas.filter(x=>Number(x&&x.modelo||0)===99).length;
+const qNfce=DADOS.vendas.filter(x=>Number(x&&x.modelo||0)===65).length;
 const elQG=qs("#tQtdGer");if(elQG)elQG.textContent=qGer;
 const elQN=qs("#tQtdNfce");if(elQN)elQN.textContent=qNfce;
 const td=DADOS.totaisDia;{
@@ -2221,14 +2358,15 @@ if(b)b.style.display="inline-flex";
 }
 }
 qs("#q").addEventListener("input",e=>{qAtual=String(e.target.value||"").trim();const p=parseBusca(qAtual);qInc=p.inc;qIgn=p.ign;qValor=consultaPareceValor(qInc);calcSomaSel();renderTabela();});
-qs("#limpar").addEventListener("click",()=>{vendAtual="";qAtual="";qInc="";qIgn=[];qValor=false;qs("#q").value="";calcSomaSel();renderTudo();toast("Filtro limpo","Mostrando todos.");});
+document.querySelectorAll('input[name="tipoBusca"]').forEach(el=>el.addEventListener("change",e=>{tipoBusca=String(e.target&&e.target.value||"todos");if(tipoBusca!=="todos"&&vendAtual&&!DADOS.vendas.some(x=>tipoLinhaOk(x)&&x.vendedor===vendAtual))vendAtual="";calcSomaSel();renderTudo();}));
+qs("#limpar").addEventListener("click",()=>{vendAtual="";qAtual="";qInc="";qIgn=[];qValor=false;tipoBusca="todos";qs("#q").value="";const rb=qs('input[name="tipoBusca"][value="todos"]');if(rb)rb.checked=true;calcSomaSel();renderTudo();toast("Filtro limpo","Mostrando todos.");});
 qs("#ajuda").addEventListener("click",abrirAjuda);
 const btnPro=qs("#proibidos");if(btnPro)btnPro.addEventListener("click",()=>{const inp=qs("#q");if(!inp)return;let v=String(inp.value||"");if(v.toLowerCase().indexOf("[proibidos]")<0)v=(v+" [proibidos]").trim();inp.value=v;qAtual=v.trim();const p=parseBusca(qAtual);qInc=p.inc;qIgn=p.ign;qValor=consultaPareceValor(qInc);calcSomaSel();renderTabela();toast("Filtro","Aplicado [proibidos].");});
 qs("#copiarTudo").addEventListener("click",()=>{copiarTexto(montarTextoCopia(false,false));toast("Copiado","Conteúdo completo (com dinheiro).");});
 qs("#copiarTudoItens").addEventListener("click",()=>{copiarTexto(montarTextoCopiaItens(false,false));toast("Copiado","Conteúdo completo + itens.");});
 qs("#copiarSemDinheiro").addEventListener("click",()=>{copiarTexto(montarTextoCopia(true,false));toast("Copiado","Ignorando vendas com Dinheiro.");});
 qs("#copiarGerencial").addEventListener("click",()=>{
-const filtradas=DADOS.vendas.map((x,i)=>({x,i})).filter(o=>passaFiltro(o.x,o.i)).map(o=>o.x);
+const filtradas=DADOS.vendas.map((x,i)=>({x,i})).filter(o=>Number(o.x&&o.x.modelo||0)===99&&passaFiltro(o.x,o.i)).map(o=>o.x);
 let out="";
 if(vendAtual){
 out+=vendAtual+":\n";
@@ -2295,7 +2433,7 @@ sync();
 };
 renderTudo();
 fixHead();
-const autoRefresh=(()=>{const MS5=5*60*1000,MS1=1000,MSMAX=2*60*1000;let tm=0;const bases=(()=>{const out=[];const add=v=>{v=String(v||"").trim().replace(/\/+$/,"");if(v&&!out.includes(v))out.push(v);};const host=String(location&&location.hostname||"").trim();if(location.protocol==="http:"||location.protocol==="https:"){add(location.origin);if(host)add(location.protocol+"//"+host+":8000");}add(DADOS&&DADOS.srv_base_rede);add(DADOS&&DADOS.srv_base_local);return out;})();const key=String(DADOS&&DADOS.srv_key||"").trim();const mk=b=>String(b||"").replace(/\/+$/,"");const api=(b,p)=>mk(b)+p;const fechar=()=>{const ov=document.getElementById("ovRefresh");if(ov)ov.remove();};const msgFalha=r=>{const m=String(r&&r.motivo||"erro");const b=String(r&&r.base||"").trim();const e=String(r&&r.erro||r&&r.det&&r.det.erro||r&&r.det&&r.det.estado||"").trim();return ("Não consegui gerar no servidor"+(m?": "+m:"")+(e?" | "+e:"")+(b?" | "+b:"")).slice(0,260);};const recarregar=b=>{const base=mk(b||bases[0]||"");if(location.protocol==="file:"&&base){location.replace(api(base,"/")+(base?"?r="+Date.now():""));return;}if(location.protocol==="file:"){location.reload();return;}const u=new URL(location.href);u.hash="";u.searchParams.set("r",Date.now());location.replace(u.toString());};const json=(u,o)=>fetch(u,o).then(async r=>({status:r.status,body:await r.json().catch(()=>({}))}));const statusBase=base=>json(api(base,"/__status?r="+Date.now()),{cache:"no-store"}).then(r=>r&&r.status>=200&&r.status<300&&r.body?{base,status:r.status,body:r.body}:null).catch(()=>null);const esperar=(base,ate,okPrev)=>new Promise(res=>{const tick=()=>{statusBase(base).then(r=>{const st=r&&r.body||null;const ok=Number(st&&st.last_ok||0);if(st&&!st.running&&(okPrev?ok>okPrev:true))return res(st);if(Date.now()>=ate)return res(st||null);setTimeout(tick,MS1);}).catch(()=>{if(Date.now()>=ate)res(null);else setTimeout(tick,MS1);});};tick();});const gerarBase=base=>{if(!base)return Promise.resolve({ok:false,motivo:"sem_base"});return statusBase(base).then(s0=>{if(!s0)return{ok:false,motivo:"sem_status",base};const okPrev=Number(s0.body&&s0.body.last_ok||0);return json(api(base,"/__gerar?r="+Date.now()),{method:"POST",cache:"no-store",headers:{"x-key":key}}).then(r=>{if(r.status===401)return{ok:false,motivo:"unauth",base,det:r.body};if(r.status===409)return esperar(base,Date.now()+MSMAX,okPrev).then(st=>st&&Number(st.last_ok||0)>okPrev?{ok:true,base,st}:{ok:false,motivo:"timeout_running",base,det:st||r.body,erro:st&&st.last_err||""});if(r.status<200||r.status>=300)return{ok:false,motivo:"http_"+r.status,base,det:r.body,erro:r.body&&r.body.erro||""};return esperar(base,Date.now()+MSMAX,okPrev).then(st=>{const novoOk=Number(st&&st.last_ok||0);if(st&&!st.running&&(okPrev?novoOk>okPrev:true))return{ok:true,base,st};return{ok:false,motivo:"timeout",base,det:st||r.body,erro:st&&st.last_err||r.body&&r.body.erro||""};});}).catch(e=>({ok:false,motivo:"rede",base,erro:e&&e.message||""}));});};const gerar=()=>{if(!key)return Promise.resolve({ok:false,motivo:"sem_key"});const loop=i=>{const base=bases[i];if(!base)return Promise.resolve({ok:false,motivo:"sem_base"});return gerarBase(base).then(r=>r&&r.ok?r:(i+1<bases.length?loop(i+1):r));};return loop(0);};const gerarEAtualizar=()=>{fechar();if(bases.length){toast("Gerando","Gerando um novo relatório no servidor...");gerar().then(r=>{if(!r||r.ok===false){toast("Atualização",msgFalha(r));return;}toast("Atualização","Relatório atualizado.");recarregar(r.base);});return;}recarregar();};const agendar=ms=>{clearTimeout(tm);tm=setTimeout(perguntar,ms);};const adiar=()=>{fechar();toast("Atualização","Adiada. Vou lembrar de novo em 5 minutos.");agendar(MS5);};const perguntar=()=>{if(document.hidden){agendar(MS5);return;}if(document.getElementById("ovRefresh"))return;const bg=document.createElement("div");bg.className="ov on";bg.id="ovRefresh";bg.setAttribute("aria-hidden","false");bg.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="mhead"><div><div class="mtitle">Atualizar relatório?</div><div class="msub">A página pode gerar e atualizar a cada 15 minutos. Se você adiar, vou perguntar de novo a cada 5 minutos.</div></div><div class="btn" id="rfFechar">Fechar</div></div><div class="mbody"><div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:nowrap"><div class="btn" id="rfAdiar">Adiar 5 min</div><div class="btn" id="rfAgora">Gerar e atualizar</div></div></div></div>';document.body.appendChild(bg);const onEsc=e=>{if(e.key!=="Escape")return;document.removeEventListener("keydown",onEsc);adiar();};document.addEventListener("keydown",onEsc);bg.addEventListener("click",e=>{if(e.target===bg){document.removeEventListener("keydown",onEsc);adiar();}});qs("#rfFechar").addEventListener("click",()=>{document.removeEventListener("keydown",onEsc);adiar();});qs("#rfAdiar").addEventListener("click",()=>{document.removeEventListener("keydown",onEsc);adiar();});qs("#rfAgora").addEventListener("click",()=>{document.removeEventListener("keydown",onEsc);gerarEAtualizar();});};const parseGerado=()=>{const el=document.querySelector(".badges .badgeHora")||document.querySelector(".badgeGeradoMobile")||document.querySelector(".badgeHora");const t=el?String(el.textContent||""):"";const m=t.match(/Gerado em:\s*(\d{2})\/(\d{2})\/(\d{2,4})\s*às\s*(\d{2}):(\d{2})/i);if(!m)return null;let y=Number(m[3]||0);if(y<100)y+=2000;const dt=new Date(y,Number(m[2])-1,Number(m[1]),Number(m[4]),Number(m[5]),0,0);return Number.isFinite(dt.getTime())?dt:null;};const alinhar=()=>{const g=parseGerado();const now=new Date();let falt=g?((g.getTime()+15*60*1000)-now.getTime()):15*60*1000;if(falt<1000)falt=1000;agendar(falt);};const btn=qs("#atualizar");if(btn)btn.addEventListener("click",gerarEAtualizar);alinhar();return{agendar,gerarEAtualizar};})();
+const LS_KEY_REFRESH_AUTO_HOJE="__relatorio_auto_gerar_hoje__";const LS_KEY_REFRESH_ALERTA_DIA="__relatorio_alerta_dia__";const autoRefresh=(()=>{const MS5=5*60*1000,MS1=1000,MSMAX=2*60*1000;let tm=0;const base=(()=>{if(location.protocol==="http:"||location.protocol==="https:")return"";const l=String(DADOS&&DADOS.srv_base_local||"").trim();const r=String(DADOS&&DADOS.srv_base_rede||"").trim();return r||l||"";})();const key=String(DADOS&&DADOS.srv_key||"").trim();const api=p=>base+p;const hoje=()=>typeof hojeStr==="function"?hojeStr():"";const fechar=()=>{const ov=document.getElementById("ovRefresh");if(ov)ov.remove();};const autoGerarHojeAtivo=()=>String(localStorage.getItem(LS_KEY_REFRESH_AUTO_HOJE)||"")===hoje();const ativarAutoGerarHoje=()=>localStorage.setItem(LS_KEY_REFRESH_AUTO_HOJE,hoje());const jaAlertouHoje=()=>String(localStorage.getItem(LS_KEY_REFRESH_ALERTA_DIA)||"")===hoje();const marcarAlertaHoje=()=>localStorage.setItem(LS_KEY_REFRESH_ALERTA_DIA,hoje());const msAteAmanha=()=>{const n=new Date(),a=new Date(n.getFullYear(),n.getMonth(),n.getDate()+1,0,0,5,0);return Math.max(1000,a.getTime()-n.getTime());};const recarregar=()=>{if(location.protocol==="file:"){location.reload();return;}const u=new URL(location.href);u.hash="";u.searchParams.set("r",Date.now());location.replace(u.toString());};const status=()=>fetch(api("/__status"),{cache:"no-store"}).then(r=>r.json());const esperar=(ate,okPrev)=>new Promise(res=>{const tick=()=>{status().then(st=>{const ok=Number(st&&st.last_ok||0);if(st&&!st.running&&(okPrev?ok>okPrev:true))return res(st);if(Date.now()>=ate)return res(st||null);setTimeout(tick,MS1);}).catch(()=>{if(Date.now()>=ate)res(null);else setTimeout(tick,MS1);});};tick();});const gerar=()=>{if(!key)return Promise.resolve({ok:false,motivo:"sem_key"});return status().then(st0=>{const okPrev=Number(st0&&st0.last_ok||0);return fetch(api("/__gerar"),{method:"POST",headers:{"x-key":key}}).then(r=>r.json().catch(()=>({})).then(j=>({st:r.status,j,okPrev}))).then(o=>{if(o.st===401)return{ok:false,motivo:"unauth"};return esperar(Date.now()+MSMAX,o.okPrev).then(st=>({ok:true,st:st||o.j}));});});};const gerarEAtualizar=({silencioso=false}={})=>{fechar();if((location.protocol==="http:"||location.protocol==="https:")||base){if(!silencioso)toast("Gerando","Gerando um novo relatório no servidor...");gerar().then(r=>{if(!r||r.ok===false){toast("Atualização",silencioso?"Falhou ao gerar automaticamente. Vou tentar de novo depois.":"Não consegui gerar no servidor. Recarregando...");if(silencioso){agendar(MS5);return;}recarregar();return;}if(!silencioso)toast("Atualização","Relatório atualizado.");recarregar();});return;}recarregar();};const agendar=ms=>{clearTimeout(tm);tm=setTimeout(perguntar,ms);};const dispensarHoje=()=>{fechar();toast("Atualização","Ok. Vou perguntar de novo amanhã.");agendar(msAteAmanha());};const autoGerarSemAlertaHoje=()=>{fechar();ativarAutoGerarHoje();toast("Atualização","Hoje não vou alertar. Vou sempre gerar automaticamente.");agendar(MS1);};const perguntar=()=>{if(document.hidden){agendar(MS5);return;}if(autoGerarHojeAtivo()){gerarEAtualizar({silencioso:true});return;}if(jaAlertouHoje()){agendar(msAteAmanha());return;}if(document.getElementById("ovRefresh"))return;marcarAlertaHoje();const bg=document.createElement("div");bg.className="ov on";bg.id="ovRefresh";bg.setAttribute("aria-hidden","false");bg.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="mhead"><div><div class="mtitle">Atualizar relatório?</div><div class="msub">A página pode gerar e atualizar a cada 15 minutos. Este alerta aparece só uma vez por dia.</div></div><div class="btn" id="rfFechar">Fechar</div></div><div class="mbody"><div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap"><div class="btn" id="rfSempreHoje">Não alertar por hoje e sempre gerar</div><div class="btn" id="rfAdiar">Hoje não</div><div class="btn" id="rfAgora">Gerar e atualizar</div></div></div></div>';document.body.appendChild(bg);const onEsc=e=>{if(e.key!=="Escape")return;document.removeEventListener("keydown",onEsc);dispensarHoje();};document.addEventListener("keydown",onEsc);bg.addEventListener("click",e=>{if(e.target===bg){document.removeEventListener("keydown",onEsc);dispensarHoje();}});qs("#rfFechar").addEventListener("click",()=>{document.removeEventListener("keydown",onEsc);dispensarHoje();});qs("#rfAdiar").addEventListener("click",()=>{document.removeEventListener("keydown",onEsc);dispensarHoje();});qs("#rfAgora").addEventListener("click",()=>{document.removeEventListener("keydown",onEsc);gerarEAtualizar();});qs("#rfSempreHoje").addEventListener("click",()=>{document.removeEventListener("keydown",onEsc);autoGerarSemAlertaHoje();});};const parseGerado=()=>{const el=document.querySelector('.badges .badgeHora')||document.querySelector('.badgeGeradoMobile')||document.querySelector('.badgeHora');const t=el?String(el.textContent||""):"";const m=t.match(/Gerado em:\s*(\d{2})\/(\d{2})\/(\d{2,4})\s*às\s*(\d{2}):(\d{2})/i);if(!m)return null;let y=Number(m[3]||0);if(y<100)y+=2000;const dt=new Date(y,Number(m[2])-1,Number(m[1]),Number(m[4]),Number(m[5]),0,0);return Number.isFinite(dt.getTime())?dt:null;};const alinhar=()=>{const g=parseGerado();const now=new Date();let falt=g?((g.getTime()+15*60*1000)-now.getTime()):15*60*1000;if(falt<1000)falt=1000;agendar(falt);};const btn=qs("#atualizar");if(btn)btn.addEventListener("click",()=>gerarEAtualizar());alinhar();return{agendar,gerarEAtualizar};})();
 </script>
 </body></html>`;
 			fs.writeFileSync(saida, html, "utf8");
