@@ -37,6 +37,29 @@ const rip=req=>{let ip=String(req.headers["x-forwarded-for"]||req.socket&&req.so
 const rua=req=>{const v=flat(req.headers["user-agent"]||"");return v.length>180?v.slice(0,180):v;};
 const existe=p=>{try{return !!p&&fs.existsSync(p)&&fs.statSync(p).isFile();}catch{return false;}};
 const lerConfScript=()=>{try{return String(fs.readFileSync(confScript,"utf8")||"").trim();}catch{return "";}};
+let scriptGlobal="";
+let buscaGlobalEmCurso=false;
+const buscarScriptGlobal=()=>{
+if(buscaGlobalEmCurso)return;
+buscaGlobalEmCurso=true;
+const drives=[];
+for(let c=65;c<=90;c++){const d=String.fromCharCode(c)+":\\";try{if(fs.existsSync(d))drives.push(d);}catch{}}
+const nome="gerar-relatorio-html.js";
+let i=0;
+const tryNext=()=>{
+if(scriptGlobal||i>=drives.length){buscaGlobalEmCurso=false;return;}
+const drv=drives[i++];
+const cmd=process.platform==="win32"?`where /r "${drv}" ${nome} 2>nul`:`find "${drv}" -name "${nome}" 2>/dev/null`;
+cp.exec(cmd,{timeout:60000,windowsHide:true},(err,stdout)=>{
+if(!scriptGlobal){
+const found=String(stdout||"").replace(/\r/g,"").split("\n").map(s=>s.trim()).filter(s=>s&&s.toLowerCase().endsWith(nome)&&existe(s))[0]||"";
+if(found){scriptGlobal=found;log("SCRIPT_GLOBAL",`drive=${drv} script="${found}"`);}
+}
+tryNext();
+});
+};
+tryNext();
+};
 const resolverScript=()=>{
 const up=ua();
 const envPath=String(process.env.GEN_SCRIPT||"").trim();
@@ -49,10 +72,11 @@ up?path.join(up,"Desktop","gerar-relatorio-html.js"):"",
 up?path.join(up,"Documents","gerar-relatorio-html.js"):"",
 up?path.join(up,"Downloads","gerar-relatorio-html.js"):"",
 path.join(process.cwd(),"gerar-relatorio-html.js"),
-path.join(root,"gerar-relatorio-html.js")
+path.join(root,"gerar-relatorio-html.js"),
+scriptGlobal
 ].filter(Boolean);
 for(const p of cand) if(existe(p)) return p;
-return envPath||confPath||"";
+return envPath||confPath||scriptGlobal||"";
 };
 const deskPath=d=>{const up=ua();if(!up)return"";const dd=String(d.getDate()).padStart(2,"0");const mm=String(d.getMonth()+1).padStart(2,"0");const yy=String(d.getFullYear());return path.join(up,"Desktop",`(FDB-DIA)_relatorio_${dd}-${mm}-${yy}.html`);};
 const isoDate=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -66,7 +90,10 @@ const initSchedule=()=>{let ms=MS15;try{if(fs.existsSync(atual)){const m=fs.stat
 const gerar=(motivo,meta)=>{
 if(st.running){log("GERAR_SKIP",`motivo=${motivo} estado=running`);return Promise.resolve({ok:false,estado:"running"});}
 const script=resolverScript();
-if(!fdb||!script||!existe(script)){log("GERAR_SKIP",`motivo=${motivo} estado=sem_cfg fdb=${fdb?"ok":"vazio"} script=${script||"vazio"} script_ok=${existe(script)?"sim":"nao"}`);return Promise.resolve({ok:false,estado:"sem_cfg",erro:`script=${script||"vazio"}`});}
+if(!fdb||!script||!existe(script)){
+if(!scriptGlobal)buscarScriptGlobal();
+log("GERAR_SKIP",`motivo=${motivo} estado=sem_cfg fdb=${fdb?"ok":"vazio"} script=${script||"vazio"} script_ok=${existe(script)?"sim":"nao"} busca_global=${buscaGlobalEmCurso?"em_curso":"nao_iniciada"}`);
+return Promise.resolve({ok:false,estado:"sem_cfg",erro:`script=${script||"vazio"}`});}
 st.running=true;st.last_start=Date.now();st.last_err="";
 const d=new Date();
 const dataISO=isoDate(d);
@@ -75,8 +102,10 @@ const info=meta&&typeof meta==="object"?meta:{};
 log("GERAR_INICIO",`motivo=${motivo} ip=${info.ip||"-"} origem=${info.origem||"-"} ua=${info.ua||"-"} data=${dataISO} script="${script}"`);
 return new Promise(res=>{ensureDir(hist);const args=[script,"--fdb",fdb,"--data",dataISO,"--saida",tmp,"--user",dbuser,"--pass",dbpass];const p=cp.spawn(process.execPath,args,{env,windowsHide:true});let out="";p.stdout.on("data",b=>{out+=String(b||"");});p.stderr.on("data",b=>{out+=String(b||"");});p.on("error",e=>{st.running=false;st.last_end=Date.now();st.last_err=flat(e&&e.message||"spawn_error");scheduleIn(MS15);log("GERAR_FALHA",`motivo=${motivo} etapa=spawn erro=${tail(st.last_err)}`);res({ok:false,estado:"spawn_error",erro:st.last_err,next_run:st.next_run});});p.on("close",code=>{st.running=false;st.last_end=Date.now();if(code===0&&fs.existsSync(tmp)){const dp=deskPath(d);const dd=String(d.getDate()).padStart(2,"0");const mm=String(d.getMonth()+1).padStart(2,"0");const yy=String(d.getFullYear());const hh=String(d.getHours()).padStart(2,"0");const mi=String(d.getMinutes()).padStart(2,"0");const histFile=path.join(hist,`(FDB-DIA)_relatorio_${dd}-${mm}-${yy}_${hh}-${mi}.html`);let fileErr="";try{fs.copyFileSync(tmp,atual);if(dp)fs.copyFileSync(tmp,dp);fs.copyFileSync(tmp,histFile);fs.unlinkSync(tmp);}catch(e){fileErr=flat(e&&e.message||"copy_error");}if(!fileErr){st.last_ok=Date.now();cleanHist(d);scheduleIn(MS15);log("GERAR_OK",`motivo=${motivo} atual="${atual}" hist="${histFile}" next_run=${st.next_run}`);res({ok:true,estado:"ok",motivo,saida_atual:atual,next_run:st.next_run,last_ok:st.last_ok,script});return;}st.last_err=fileErr;scheduleIn(MS15);log("GERAR_FALHA",`motivo=${motivo} etapa=arquivo erro=${tail(fileErr)}`);res({ok:false,estado:"erro_arquivo",erro:st.last_err,next_run:st.next_run,script});return;}st.last_err=tail(out)||("erro "+code);scheduleIn(MS15);log("GERAR_FALHA",`motivo=${motivo} code=${code} erro=${tail(st.last_err)}`);res({ok:false,estado:"erro",code,erro:st.last_err,next_run:st.next_run,script});});});
 };
-ensureDir(hist);initLog();cleanHist(new Date());initSchedule();
+ensureDir(hist);initLog();cleanHist(new Date());
+buscarScriptGlobal();
+initSchedule();
 process.on("uncaughtException",e=>{log("UNCAUGHT",`erro=${tail(e&&e.stack||e&&e.message||e||"erro")}`);});
 process.on("unhandledRejection",e=>{log("UNHANDLED",`erro=${tail(e&&e.stack||e&&e.message||e||"erro")}`);});
-const srv=http.createServer((req,res)=>{const u=new URL(req.url||"/","http://127.0.0.1");const p=String(u.pathname||"/");if(req.method==="OPTIONS"){res.writeHead(204,cors());res.end();return;}if(p==="/__status"&&req.method==="GET"){okJson(res,{running:st.running,last_start:st.last_start,last_end:st.last_end,last_ok:st.last_ok,last_err:st.last_err,next_run:st.next_run,port,webip,script:resolverScript(),script_cfg:lerConfScript()},200,cors());return;}if(p==="/__gerar"&&req.method==="POST"){const id=++reqId;const k=String(req.headers["x-key"]||"").trim();const ip=rip(req);const origem=flat(req.headers.origin||req.headers.referer||"-");const a=rua(req);log("GERAR_REQ",`id=${id} ip=${ip} origem=${origem||"-"} key=${key&&k===key?"ok":"invalida"} running=${st.running} ua=${a||"-"}`);if(!key||k!==key){log("GERAR_DENY",`id=${id} ip=${ip} motivo=unauth`);okJson(res,{ok:false,estado:"unauth",req_id:id},401,cors());return;}if(st.running){log("GERAR_BUSY",`id=${id} ip=${ip} last_start=${st.last_start}`);okJson(res,{ok:false,estado:"running",running:true,last_start:st.last_start,last_ok:st.last_ok,next_run:st.next_run,req_id:id},409,cors());return;}gerar("manual",{id,ip,origem,ua:a}).then(r=>{log("GERAR_RES",`id=${id} ok=${!!(r&&r.ok)} estado=${r&&r.estado||"-"} last_ok=${st.last_ok} script="${r&&r.script||resolverScript()||""}" erro=${tail(r&&r.erro||"")||"-"}`);okJson(res,Object.assign({req_id:id},r||{}),200,cors());});return;}if(p==="/__proibidos"&&req.method==="GET"){lerProib(lista=>okJson(res,{ok:true,lista},200,cors()));return;}if(p==="/__proibidos"&&req.method==="POST"){const k=String(req.headers["x-key"]||"").trim();if(key&&k!==key){okJson(res,{ok:false,estado:"unauth"},401,cors());return;}let body="";req.on("data",b=>{body+=String(b||"");if(body.length>200000)body=body.slice(0,200000);});req.on("end",()=>{const inc=parseLista(body);lerProib(lista0=>{const merged=uniq([...lista0,...inc].map(normP).filter(Boolean));salvarProib(merged,()=>okJson(res,{ok:true,lista:merged},200,cors()));});});return;}let rel=p;if(rel==="/"||rel==="")rel="/relatorio_atual.html";rel=rel.replace(/^\/+/,"");const fp=path.resolve(path.join(root,rel));if(fp.indexOf(root)!==0)return bad(res,403,"403");serveFile(res,fp);});
+const srv=http.createServer((req,res)=>{const u=new URL(req.url||"/","http://127.0.0.1");const p=String(u.pathname||"/");if(req.method==="OPTIONS"){res.writeHead(204,cors());res.end();return;}if(p==="/__status"&&req.method==="GET"){okJson(res,{running:st.running,last_start:st.last_start,last_end:st.last_end,last_ok:st.last_ok,last_err:st.last_err,next_run:st.next_run,port,webip,script:resolverScript(),script_cfg:lerConfScript(),script_global:scriptGlobal,busca_global_em_curso:buscaGlobalEmCurso},200,cors());return;}if(p==="/__gerar"&&req.method==="POST"){const id=++reqId;const k=String(req.headers["x-key"]||"").trim();const ip=rip(req);const origem=flat(req.headers.origin||req.headers.referer||"-");const a=rua(req);log("GERAR_REQ",`id=${id} ip=${ip} origem=${origem||"-"} key=${key&&k===key?"ok":"invalida"} running=${st.running} ua=${a||"-"}`);if(!key||k!==key){log("GERAR_DENY",`id=${id} ip=${ip} motivo=unauth`);okJson(res,{ok:false,estado:"unauth",req_id:id},401,cors());return;}if(st.running){log("GERAR_BUSY",`id=${id} ip=${ip} last_start=${st.last_start}`);okJson(res,{ok:false,estado:"running",running:true,last_start:st.last_start,last_ok:st.last_ok,next_run:st.next_run,req_id:id},409,cors());return;}gerar("manual",{id,ip,origem,ua:a}).then(r=>{log("GERAR_RES",`id=${id} ok=${!!(r&&r.ok)} estado=${r&&r.estado||"-"} last_ok=${st.last_ok} script="${r&&r.script||resolverScript()||""}" erro=${tail(r&&r.erro||"")||"-"}`);okJson(res,Object.assign({req_id:id},r||{}),200,cors());});return;}if(p==="/__proibidos"&&req.method==="GET"){lerProib(lista=>okJson(res,{ok:true,lista},200,cors()));return;}if(p==="/__proibidos"&&req.method==="POST"){const k=String(req.headers["x-key"]||"").trim();if(key&&k!==key){okJson(res,{ok:false,estado:"unauth"},401,cors());return;}let body="";req.on("data",b=>{body+=String(b||"");if(body.length>200000)body=body.slice(0,200000);});req.on("end",()=>{const inc=parseLista(body);lerProib(lista0=>{const merged=uniq([...lista0,...inc].map(normP).filter(Boolean));salvarProib(merged,()=>okJson(res,{ok:true,lista:merged},200,cors()));});});return;}let rel=p;if(rel==="/"||rel==="")rel="/relatorio_atual.html";rel=rel.replace(/^\/+/,"");const fp=path.resolve(path.join(root,rel));if(fp.indexOf(root)!==0)return bad(res,403,"403");serveFile(res,fp);});
 srv.listen(port,"0.0.0.0",()=>{log("SERVIDOR_OK",`${port} ${root} webip=${webip} script="${resolverScript()}" cfg="${lerConfScript()}"`);});
