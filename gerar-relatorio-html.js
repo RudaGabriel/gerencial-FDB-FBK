@@ -357,7 +357,8 @@
 
 			const linhas = [];
 			for (const [key, v] of mapVendas.entries()) {
-				let finalTotal = v.total_pag > 0 ? v.total_pag : v.total_nfce;
+				// Prioriza o total da nota (venda real). Se for 0 (ex: recebimento avulso), usa o total pago.
+				let finalTotal = v.total_nfce > 0 ? v.total_nfce : v.total_pag;
 				if (finalTotal <= 0) continue;
 
 				let finalVendedor = v.vendedor;
